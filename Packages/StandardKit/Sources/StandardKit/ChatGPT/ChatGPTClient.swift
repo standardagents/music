@@ -16,6 +16,20 @@ public enum ChatGPTError: Error, LocalizedError, Sendable {
     case rateLimited(retryAfter: TimeInterval?, message: String)
     case failed(String)
     case malformed(String)
+    /// The Images endpoint's safety system rejected the request or the image it produced. Retrying
+    /// the same prompt fails the same way.
+    case moderationBlocked([String])
+
+    /// Maps a non-200 response, recognizing the Images endpoint's `moderation_blocked` rejection.
+    static func from(status: Int, body: Data) -> ChatGPTError {
+        if let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+            let error = json["error"] as? [String: Any], error["code"] as? String == "moderation_blocked"
+        {
+            let categories = (error["moderation_details"] as? [String: Any])?["categories"] as? [String] ?? []
+            return .moderationBlocked(categories)
+        }
+        return .http(status, String(decoding: body, as: UTF8.self))
+    }
 
     public var errorDescription: String? {
         switch self {
@@ -30,6 +44,8 @@ public enum ChatGPTError: Error, LocalizedError, Sendable {
         case .rateLimited(_, let message): message
         case .failed(let m): m
         case .malformed(let m): "Unexpected response: \(m)"
+        case .moderationBlocked(let categories):
+            "OpenAI's safety system blocked this image\(categories.isEmpty ? "" : " (\(categories.joined(separator: ", ")))")."
         }
     }
 
@@ -178,7 +194,7 @@ public actor ChatGPTClient {
                         retryAfter: retry ?? resets,
                         message: "You've hit your ChatGPT usage limit for now. Generation will resume automatically.")
                 }
-                guard status == 200 else { throw ChatGPTError.http(status, String(decoding: data, as: UTF8.self)) }
+                guard status == 200 else { throw ChatGPTError.from(status: status, body: data) }
                 guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                     let first = (json["data"] as? [[String: Any]])?.first,
                     let b64 = first["b64_json"] as? String, let raw = Data(base64Encoded: b64)
