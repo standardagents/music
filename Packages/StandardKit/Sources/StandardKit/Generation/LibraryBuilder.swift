@@ -181,10 +181,13 @@ public actor LibraryBuilder {
             let failures = try await db.reader.read { db in
                 try Artist.filter(Column("batchID") == batch.id && Column("status") != ItemStatus.ready.rawValue).fetchCount(db)
             }
-            try setBatchStatus(batch.id, failures == 0 ? .finished : .failed)
+            // The UI shows `error` when a build fails; without it a partial failure read "Something went wrong."
+            let message = failures == 0 ? nil : Self.unfinishedMessage(failures)
+            try setBatchStatus(batch.id, failures == 0 ? .finished : .failed, error: message)
             publish {
                 $0.phase = failures == 0 ? .finished : .failed
-                $0.activity = failures == 0 ? "Your library is ready" : "\(failures) artists couldn't be finished"
+                $0.error = message
+                $0.activity = message ?? "Your library is ready"
                 $0.artistsReady = readyCount(batch.id)
                 $0.progress = Double($0.artistsReady)
                 $0.artistsInProgress = 0
@@ -798,7 +801,13 @@ public actor LibraryBuilder {
             Art direction: \(artist.imagePrompt ?? PortraitDirection.assign(genres: [artist.primaryGenre] + artist.genres, isGroup: artist.members.count > 1) + "\n" + artist.tagline)
             Follow the art direction's framing, look, setting and light exactly; it must not look like a generic band press shot. Photorealistic (unless the art direction asks for a painting), natural skin texture, authentic to the era's camera technology. Fictional people only. Absolutely no text, logos or watermarks.
             """
-        let data = try await imageLimit.run { try await self.client.image(prompt: prompt) }
+        let fallback = """
+            Square artist photo for a fictional \(artist.primaryGenre) act called "\(artist.name)" from \(artist.origin), circa \(artist.formedYear + 2).
+            A wide environmental shot: the \(artist.members.count > 1 ? "musicians stand" : "musician stands") small in the frame, fully clothed in everyday street clothes, in a place that fits the music, with natural light. Photorealistic, authentic to the era's camera technology. Fictional people only. Absolutely no text, logos or watermarks.
+            """
+        let data = try await imageLimit.run {
+            try await Self.paint(prompt, fallback: fallback) { try await self.client.image(prompt: $0) }
+        }
         let path = try artwork.save(data, kind: .artist, id: artist.id)
         let accent = ArtworkStore.palette(from: data).first
         _ = try db.modifyArtist(artist.id) {
@@ -814,13 +823,44 @@ public actor LibraryBuilder {
             Art direction: \(album.coverPrompt)
             It must look like a real, professionally designed \(album.primaryGenre) release from \(album.releaseYear), following the art direction's medium faithfully (a photo stays a photo, a painting stays a painting). Avoid aged-paper textures, archival documents and muted still lifes unless the art direction asks for them. If typography is used, spell "\(artist.name)" and "\(album.title)" exactly. No watermarks, no parental advisory labels, no real brands.
             """
-        let data = try await imageLimit.run(first: urgent) { try await self.client.image(prompt: prompt) }
+        let fallback = Self.safeCoverPrompt(
+            title: album.title, artist: artist.name, year: album.releaseYear, genre: album.primaryGenre,
+            kind: album.kind.label.lowercased())
+        let data = try await imageLimit.run(first: urgent) {
+            try await Self.paint(prompt, fallback: fallback) { try await self.client.image(prompt: $0) }
+        }
         let path = try artwork.save(data, kind: .album, id: album.id)
         let palette = ArtworkStore.palette(from: data)
         _ = try db.modifyAlbum(album.id) {
             $0.coverPath = path
             $0.palette = palette
         }
+    }
+
+    /// Generates art from `prompt`; if the safety system blocks it, tries once more with `fallback`,
+    /// a prompt with no people in it. Without this, one blocked cover fails the whole artist.
+    static func paint(
+        _ prompt: String, fallback: String, generate: @Sendable (String) async throws -> Data
+    ) async throws -> Data {
+        do {
+            return try await generate(prompt)
+        } catch ChatGPTError.moderationBlocked(let categories) {
+            buildLog.notice("Image blocked by moderation (\(categories.joined(separator: ","))); using the fallback prompt")
+            return try await generate(fallback)
+        }
+    }
+
+    /// A cover that keeps the release's identity but drops the art direction (the usual cause of a
+    /// moderation block) in favor of a people-free graphic design.
+    static func safeCoverPrompt(title: String, artist: String, year: Int, genre: String, kind: String) -> String {
+        """
+        Square album cover art for "\(title)" by "\(artist)", a \(year) \(genre) \(kind).
+        A bold graphic design: typography, color and abstract shapes that capture the mood of \(genre) in \(year). No people, faces or bodies anywhere. Spell "\(artist)" and "\(title)" exactly. It must look like a real, professionally designed release. No watermarks, no parental advisory labels, no real brands.
+        """
+    }
+
+    static func unfinishedMessage(_ failures: Int) -> String {
+        "\(failures) \(failures == 1 ? "artist" : "artists") couldn’t be finished."
     }
 
     struct ReleasePayload: Decodable, Sendable {
