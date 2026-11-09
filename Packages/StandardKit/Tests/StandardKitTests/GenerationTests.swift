@@ -93,6 +93,13 @@ import Testing
         #expect(out.hasSuffix("picked guitars, watchful, brisk"))
     }
 
+    /// Harmonica, fiddle and "warm" on every song made brooding folk rock come out as upbeat country.
+    @Test func folkRockKeepsTheSongsMoodAndLosesCountrySignals() {
+        let out = GenreSound.recordingTags(tags: "English, folk rock, acoustic guitar, fiddle, pedal steel, harmonica, brooding, slow", genres: ["folk rock"])
+        #expect(out == "folk rock, acoustic guitar, electric guitar, bass guitar, live drums, harmonica, brooding, slow")
+        #expect(!GenreSound.guide(for: ["folk rock"]).contains("warm"))
+    }
+
     @Test func unknownGenresKeepTheirOwnTagsInCanonicalForm() {
         #expect(GenreSound.recordingTags(tags: "English, polka, accordion, tuba, a very lively village dance production, jolly", genres: ["polka"])
             == "polka, accordion, tuba, jolly")
