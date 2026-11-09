@@ -96,24 +96,57 @@ private struct NowPlayingChromeButtonStyle: ButtonStyle {
 /// Hides the window's toolbar while Now Playing is up but keeps the titlebar (and its traffic
 /// lights) floating transparently over the backdrop, like Music. SwiftUI's own toolbar hiding
 /// would hide the traffic lights too.
+///
+/// SwiftUI shows the toolbar again whenever it rebuilds it (a track change, toggling the sidebar),
+/// which left the toolbar sitting on top of Now Playing and its close button. So the toolbar's
+/// visibility is watched and held hidden for as long as Now Playing is up.
 private struct TrafficLightKeeper: NSViewRepresentable {
     final class Probe: NSView {
         private weak var managed: NSWindow?
         private var wasTransparent = false
+        private var watches: [NSKeyValueObservation] = []
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            if let window {
+            guard let window else { return restore() }
+            if managed !== window {
+                restore()
                 managed = window
                 wasTransparent = window.titlebarAppearsTransparent
-                window.toolbar?.isVisible = false
-                window.titlebarAppearsTransparent = true
-            } else {
-                restore()
+                watch(window)
+            }
+            enforce()
+        }
+
+        /// Hides the toolbar and keeps the titlebar transparent, now and whenever something undoes it.
+        func enforce() {
+            guard let window = managed else { return }
+            if window.toolbar?.isVisible == true { window.toolbar?.isVisible = false }
+            if !window.titlebarAppearsTransparent { window.titlebarAppearsTransparent = true }
+        }
+
+        private func watch(_ window: NSWindow) {
+            watches = [
+                window.observe(\.toolbar) { [weak self] _, _ in
+                    DispatchQueue.main.async { self?.watchToolbar(); self?.enforce() }
+                },
+                window.observe(\.titlebarAppearsTransparent) { [weak self] _, _ in
+                    DispatchQueue.main.async { self?.enforce() }
+                },
+            ]
+            watchToolbar()
+        }
+
+        private var toolbarWatch: NSKeyValueObservation?
+        private func watchToolbar() {
+            toolbarWatch = managed?.toolbar?.observe(\.isVisible) { [weak self] _, _ in
+                DispatchQueue.main.async { self?.enforce() }
             }
         }
 
         func restore() {
+            watches = []
+            toolbarWatch = nil
             guard let window = managed else { return }
             window.toolbar?.isVisible = true
             window.titlebarAppearsTransparent = wasTransparent
@@ -122,7 +155,7 @@ private struct TrafficLightKeeper: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> Probe { Probe() }
-    func updateNSView(_ nsView: Probe, context: Context) {}
+    func updateNSView(_ nsView: Probe, context: Context) { nsView.enforce() }
     static func dismantleNSView(_ nsView: Probe, coordinator: ()) { nsView.restore() }
 }
 

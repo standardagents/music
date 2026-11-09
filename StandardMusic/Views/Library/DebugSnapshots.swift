@@ -7,7 +7,7 @@ import SwiftUI
 /// and renders the main window to `<dir>/<name>.png` — works without screen-recording permission.
 ///   nav <home|browse|create|recentlyAdded|artists|albums|songs|favorites|search>
 ///   album|artist|genre|shelf <value> · playalbum <albumID> · search <text> · queue · lyrics · close
-///   size <w> <h> · dark · light · wait <seconds> · shot <name>
+///   size <w> <h> · dark · light · wait <seconds> · shot <name> · action <selector:>
 @MainActor
 enum DebugSnapshots {
     static func run(model: AppModel, library: LibraryState) async {
@@ -162,6 +162,7 @@ enum DebugSnapshots {
                             scroll.reflectScrolledClipView(scroll.contentView)
                         }
                     }
+                case "action": NSApp.sendAction(Selector(arg), to: nil, from: nil)  // e.g. action toggleSidebar:
                 case "wait": try? await Task.sleep(for: .seconds(Double(arg) ?? 1))
                 case "shot":
                     try? await Task.sleep(for: .seconds(1.2))
