@@ -105,4 +105,4 @@ Everything lives in `~/Library/Application Support/StandardMusic/`: `Library/Lib
 
 ## Licenses
 
-YuE2 weights are CC BY-NC 4.0 (non-commercial); generated audio inherits that restriction.
+Standard Music's code is [MIT](LICENSE). YuE2 weights are CC BY-NC 4.0 (non-commercial); generated audio inherits that restriction.
